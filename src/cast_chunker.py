@@ -1,6 +1,11 @@
 """cAST: Chunking via Abstract Syntax Trees.
 
-Implements the recursive split-then-merge algorithm from:
+Provides two implementations:
+  1. Our simplified version of Algorithm 1 from the paper
+  2. A wrapper around the official `astchunk` library
+     (https://github.com/yilinjz/astchunk)
+
+Reference:
   Zhang et al., "cAST: Enhancing Code Retrieval-Augmented Generation
   with Structural Chunking via Abstract Syntax Tree" (EMNLP 2025)
   https://arxiv.org/abs/2506.15655
@@ -10,6 +15,7 @@ Chunk size is measured by non-whitespace character count, following the paper.
 
 import tree_sitter
 import tree_sitter_python as tspython
+from astchunk import ASTChunkBuilder
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -21,7 +27,7 @@ class Chunk:
     start_line: int
     end_line: int
     filepath: str
-    chunk_type: str  # "cast" or "fixed"
+    chunk_type: str  # "cast", "cast-ref", or "fixed"
     nws_size: int  # non-whitespace character count
 
     def __repr__(self) -> str:
@@ -98,7 +104,7 @@ def cast_chunk(
     filepath: str = "<unknown>",
     max_chunk_size: int = 2000,
 ) -> List[Chunk]:
-    """Chunk Python source code using the cAST algorithm.
+    """Chunk Python source code using our implementation of the cAST algorithm.
 
     Args:
         code: Python source code string.
@@ -143,6 +149,51 @@ def cast_chunk(
             filepath=filepath,
             chunk_type="cast",
             nws_size=_nws_count(content),
+        ))
+
+    return chunks
+
+
+def cast_chunk_ref(
+    code: str,
+    filepath: str = "<unknown>",
+    max_chunk_size: int = 2000,
+) -> List[Chunk]:
+    """Chunk Python source code using the official astchunk library.
+
+    Uses ASTChunkBuilder from https://github.com/yilinjz/astchunk
+    as the reference implementation.
+
+    Args:
+        code: Python source code string.
+        filepath: File path for metadata.
+        max_chunk_size: Max non-whitespace characters per chunk.
+
+    Returns:
+        List of Chunk objects from the reference implementation.
+    """
+    builder = ASTChunkBuilder(
+        max_chunk_size=max_chunk_size,
+        language="python",
+        metadata_template="default",
+    )
+    raw_chunks = builder.chunkify(
+        code,
+        repo_level_metadata={"filepath": filepath},
+    )
+
+    chunks = []
+    for rc in raw_chunks:
+        content = rc["content"]
+        meta = rc.get("metadata", {})
+        # astchunk uses 0-indexed line numbers; convert to 1-indexed
+        chunks.append(Chunk(
+            content=content,
+            start_line=meta.get("start_line_no", 0) + 1,
+            end_line=meta.get("end_line_no", content.count("\n")) + 1,
+            filepath=filepath,
+            chunk_type="cast-ref",
+            nws_size=meta.get("chunk_size", _nws_count(content)),
         ))
 
     return chunks

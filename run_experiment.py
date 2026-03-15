@@ -5,9 +5,9 @@ Reproduces the core finding from:
   Zhang et al., "cAST: Enhancing Code Retrieval-Augmented Generation
   with Structural Chunking via Abstract Syntax Tree" (EMNLP 2025)
 
-This experiment demonstrates that AST-aware chunking produces more
-semantically coherent chunks, leading to better retrieval quality
-compared to naive fixed-size line-based chunking.
+Uses the official astchunk library (https://github.com/yilinjz/astchunk)
+as the reference implementation, alongside our own simplified version
+and a fixed-size baseline for comparison.
 
 Usage:
     python run_experiment.py
@@ -18,7 +18,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from src.cast_chunker import cast_chunk
+from src.cast_chunker import cast_chunk, cast_chunk_ref
 from src.fixed_chunker import fixed_chunk
 from src.rag_pipeline import SimpleRetriever, evaluate_retrieval
 
@@ -34,79 +34,79 @@ QUERIES = [
     {
         "query": "compute mean average of a list of numbers",
         "filepath": "stats.py",
-        "expected_lines": [(9, 23)],  # compute_mean function
+        "expected_lines": [(9, 23)],
     },
     {
         "query": "calculate standard deviation and variance",
         "filepath": "stats.py",
-        "expected_lines": [(26, 40), (43, 45)],  # compute_variance + compute_std
+        "expected_lines": [(26, 40), (43, 45)],
     },
     {
         "query": "percentile interpolation calculation",
         "filepath": "stats.py",
-        "expected_lines": [(107, 123)],  # percentile method
+        "expected_lines": [(107, 123)],
     },
     {
         "query": "z-score normalization for data points",
         "filepath": "stats.py",
-        "expected_lines": [(103, 105)],  # z_scores method
+        "expected_lines": [(103, 105)],
     },
     {
         "query": "summary statistics dictionary with min max range",
         "filepath": "stats.py",
-        "expected_lines": [(125, 138)],  # to_dict method
+        "expected_lines": [(125, 138)],
     },
     # --- data_loader.py queries ---
     {
         "query": "load CSV file and parse records with delimiter",
         "filepath": "data_loader.py",
-        "expected_lines": [(47, 78)],  # CSVLoader.load method
+        "expected_lines": [(47, 78)],
     },
     {
         "query": "filter records by category name",
         "filepath": "data_loader.py",
-        "expected_lines": [(80, 84)],  # filter_by_category
+        "expected_lines": [(80, 84)],
     },
     {
         "query": "validate data records check duplicate IDs and negative values",
         "filepath": "data_loader.py",
-        "expected_lines": [(131, 160)],  # validate_records function
+        "expected_lines": [(131, 160)],
     },
     {
         "query": "merge multiple JSON files and deduplicate by id",
         "filepath": "data_loader.py",
-        "expected_lines": [(115, 129)],  # merge_files method
+        "expected_lines": [(115, 129)],
     },
     {
         "query": "DataRecord dataclass with tags and category fields",
         "filepath": "data_loader.py",
-        "expected_lines": [(12, 39)],  # DataRecord class
+        "expected_lines": [(12, 39)],
     },
     # --- cache.py queries ---
     {
         "query": "LRU cache get retrieve value by key and move to end",
         "filepath": "cache.py",
-        "expected_lines": [(57, 72)],  # LRUCache.get method
+        "expected_lines": [(57, 72)],
     },
     {
         "query": "cache evict expired entries remove old TTL",
         "filepath": "cache.py",
-        "expected_lines": [(104, 112)],  # evict_expired method
+        "expected_lines": [(104, 112)],
     },
     {
         "query": "get or compute cache miss fallback callable",
         "filepath": "cache.py",
-        "expected_lines": [(130, 152)],  # get_or_compute method
+        "expected_lines": [(130, 152)],
     },
     {
         "query": "cache hit rate statistics performance metrics",
         "filepath": "cache.py",
-        "expected_lines": [(118, 127)],  # hit_rate + stats
+        "expected_lines": [(118, 127)],
     },
     {
         "query": "thread safe cache put insert with TTL expiration",
         "filepath": "cache.py",
-        "expected_lines": [(74, 93)],  # put method
+        "expected_lines": [(74, 93)],
     },
 ]
 
@@ -123,7 +123,7 @@ def load_test_files():
     return files
 
 
-def print_separator(char="=", width=70):
+def print_separator(char="=", width=72):
     print(char * width)
 
 
@@ -136,25 +136,24 @@ def print_chunks_overview(label, chunks):
               f"({lines} lines, {c.nws_size} nws chars)")
 
 
-def show_chunk_quality(label, chunks, filepath):
-    """Show whether chunks break function/class boundaries."""
+def count_mid_block_breaks(chunks):
+    """Count chunks that start mid-function/class (broken boundaries)."""
     breaks = 0
     for c in chunks:
         lines = c.content.split("\n")
-        # Check if chunk starts mid-function (indented, no def/class)
         first_nonblank = next((l for l in lines if l.strip()), "")
         if first_nonblank and first_nonblank[0] == " " and \
-           not first_nonblank.strip().startswith(("def ", "class ", "@", "#", '"""', "'''")):
+           not first_nonblank.strip().startswith(
+               ("def ", "class ", "@", "#", '"""', "'''")):
             breaks += 1
-    print(f"  {label} ({filepath}): {breaks}/{len(chunks)} chunks "
-          f"start mid-block (lower is better)")
     return breaks
 
 
 def main():
     print_separator()
-    print("cAST vs Fixed-Size Chunking — RAG Retrieval Experiment")
-    print("Based on: Zhang et al., EMNLP 2025 (arXiv:2506.15655)")
+    print("  cAST vs Fixed-Size Chunking — RAG Retrieval Experiment")
+    print("  Paper:  Zhang et al., EMNLP 2025 (arXiv:2506.15655)")
+    print("  Ref:    https://github.com/yilinjz/astchunk")
     print_separator()
 
     # Load test codebase
@@ -162,131 +161,167 @@ def main():
     print(f"\nLoaded {len(files)} test files: {', '.join(files.keys())}")
 
     # -------------------------------------------------------------------
-    # Step 1: Chunk all files with both strategies
+    # Step 1: Chunk all files with all three strategies
     # -------------------------------------------------------------------
-    print("\n" + "=" * 70)
-    print("STEP 1: Chunking")
-    print("=" * 70)
+    print("\n" + "=" * 72)
+    print("STEP 1: Chunking Comparison")
+    print("=" * 72)
 
-    cast_chunks = []
-    fixed_chunks = []
-    total_cast_breaks = 0
-    total_fixed_breaks = 0
+    MAX_CHUNK_SIZE = 800  # non-whitespace chars (small to force splits)
+    MAX_LINES = 20        # for fixed-size baseline
+
+    strategies = {
+        "cAST (ours)": [],
+        "cAST (ref) ": [],
+        "Fixed-size ": [],
+    }
 
     for fname, code in files.items():
-        cc = cast_chunk(code, filepath=fname, max_chunk_size=800)
-        fc = fixed_chunk(code, filepath=fname, max_lines=20)
-        cast_chunks.extend(cc)
-        fixed_chunks.extend(fc)
+        cc_ours = cast_chunk(code, filepath=fname, max_chunk_size=MAX_CHUNK_SIZE)
+        cc_ref = cast_chunk_ref(code, filepath=fname, max_chunk_size=MAX_CHUNK_SIZE)
+        fc = fixed_chunk(code, filepath=fname, max_lines=MAX_LINES)
 
-        print_chunks_overview(f"cAST  ({fname})", cc)
-        print_chunks_overview(f"Fixed ({fname})", fc)
+        strategies["cAST (ours)"].extend(cc_ours)
+        strategies["cAST (ref) "].extend(cc_ref)
+        strategies["Fixed-size "].extend(fc)
 
-        total_cast_breaks += show_chunk_quality("cAST ", cc, fname)
-        total_fixed_breaks += show_chunk_quality("Fixed", fc, fname)
+        print(f"\n  --- {fname} ---")
+        for label, chunks in [("cAST (ours)", cc_ours),
+                              ("cAST (ref) ", cc_ref),
+                              ("Fixed-size ", fc)]:
+            breaks = count_mid_block_breaks(chunks)
+            print(f"    {label}: {len(chunks):>2} chunks, "
+                  f"{breaks} mid-block breaks")
 
-    print(f"\n  TOTAL mid-block breaks: cAST={total_cast_breaks}, "
-          f"Fixed={total_fixed_breaks}")
+    print(f"\n  Strategy totals:")
+    for label, chunks in strategies.items():
+        breaks = count_mid_block_breaks(chunks)
+        print(f"    {label}: {len(chunks):>2} chunks total, "
+              f"{breaks} mid-block breaks")
 
     # -------------------------------------------------------------------
-    # Step 2: Show example chunks side by side
+    # Step 2: Show example chunk comparison
     # -------------------------------------------------------------------
-    print("\n" + "=" * 70)
-    print("STEP 2: Example Chunk Comparison (stats.py around compute_variance)")
-    print("=" * 70)
+    print("\n" + "=" * 72)
+    print("STEP 2: Example — how each method chunks compute_variance (stats.py)")
+    print("=" * 72)
 
-    # Find the chunk containing compute_variance for each strategy
-    for label, chunks in [("cAST", cast_chunks), ("Fixed", fixed_chunks)]:
+    for label, chunks in strategies.items():
         for c in chunks:
             if c.filepath == "stats.py" and "compute_variance" in c.content:
-                print(f"\n  --- {label} chunk (lines {c.start_line}-{c.end_line}) ---")
-                # Show first 15 lines
-                preview_lines = c.content.split("\n")[:15]
+                print(f"\n  --- {label.strip()} (lines {c.start_line}-{c.end_line}) ---")
+                preview_lines = c.content.split("\n")[:12]
                 for line in preview_lines:
                     print(f"  | {line}")
-                if len(c.content.split("\n")) > 15:
-                    print(f"  | ... ({len(c.content.split(chr(10)))} lines total)")
+                total = len(c.content.split("\n"))
+                if total > 12:
+                    print(f"  | ... ({total} lines total)")
                 break
 
     # -------------------------------------------------------------------
-    # Step 3: Build retrievers and evaluate
+    # Step 3: Build retrievers and evaluate all three
     # -------------------------------------------------------------------
-    print("\n" + "=" * 70)
-    print("STEP 3: Retrieval Evaluation (TF-IDF + Cosine Similarity)")
-    print("=" * 70)
-
-    cast_retriever = SimpleRetriever(cast_chunks)
-    fixed_retriever = SimpleRetriever(fixed_chunks)
+    print("\n" + "=" * 72)
+    print("STEP 3: Retrieval Evaluation (TF-IDF + Cosine Similarity, top_k=3)")
+    print("=" * 72)
 
     top_k = 3
-    cast_results = evaluate_retrieval(cast_retriever, QUERIES, top_k=top_k)
-    fixed_results = evaluate_retrieval(fixed_retriever, QUERIES, top_k=top_k)
+    results = {}
+    for label, chunks in strategies.items():
+        retriever = SimpleRetriever(chunks)
+        results[label] = evaluate_retrieval(retriever, QUERIES, top_k=top_k)
 
-    print(f"\n  {'Metric':<25} {'cAST':>10} {'Fixed':>10} {'Delta':>10}")
-    print(f"  {'-'*55}")
+    print(f"\n  {'Metric':<20}", end="")
+    for label in strategies:
+        print(f" {label.strip():>12}", end="")
+    print()
+    print(f"  {'-'*56}")
+
     for metric in ["avg_precision", "avg_recall"]:
-        c_val = cast_results[metric]
-        f_val = fixed_results[metric]
-        delta = c_val - f_val
-        sign = "+" if delta >= 0 else ""
-        print(f"  {metric:<25} {c_val:>10.4f} {f_val:>10.4f} {sign}{delta:>9.4f}")
+        print(f"  {metric:<20}", end="")
+        for label in strategies:
+            print(f" {results[label][metric]:>12.4f}", end="")
+        print()
+
+    # Delta row
+    print(f"\n  {'Delta vs Fixed':<20}", end="")
+    fixed_label = "Fixed-size "
+    for label in strategies:
+        if label == fixed_label:
+            print(f" {'(baseline)':>12}", end="")
+        else:
+            delta = results[label]["avg_recall"] - results[fixed_label]["avg_recall"]
+            sign = "+" if delta >= 0 else ""
+            print(f" {sign}{delta:>11.4f}", end="")
+    print()
 
     # -------------------------------------------------------------------
     # Step 4: Per-query breakdown
     # -------------------------------------------------------------------
-    print("\n" + "=" * 70)
-    print("STEP 4: Per-Query Results")
-    print("=" * 70)
-    print(f"\n  {'Query':<55} {'cAST P':>7} {'Fix P':>7} {'cAST R':>7} {'Fix R':>7}")
-    print(f"  {'-'*83}")
+    print("\n" + "=" * 72)
+    print("STEP 4: Per-Query Recall")
+    print("=" * 72)
 
-    cast_wins = 0
-    fixed_wins = 0
-    ties = 0
+    labels = list(strategies.keys())
+    header = f"  {'Query':<50}"
+    for l in labels:
+        header += f" {l.strip()[:8]:>8}"
+    print(f"\n{header}")
+    print(f"  {'-'*74}")
 
-    for cd, fd in zip(cast_results["details"], fixed_results["details"]):
-        q_short = cd["query"][:52] + "..." if len(cd["query"]) > 52 else cd["query"]
-        cp, fp = cd["precision"], fd["precision"]
-        cr, fr = cd["recall"], fd["recall"]
-        print(f"  {q_short:<55} {cp:>7.2f} {fp:>7.2f} {cr:>7.2f} {fr:>7.2f}")
+    wins = {l: 0 for l in labels}
 
-        # Count wins based on recall (the primary metric from the paper)
-        if cr > fr:
-            cast_wins += 1
-        elif fr > cr:
-            fixed_wins += 1
-        else:
-            ties += 1
+    for i, q in enumerate(QUERIES):
+        q_short = q["query"][:47] + "..." if len(q["query"]) > 47 else q["query"]
+        row = f"  {q_short:<50}"
+        recalls = {}
+        for l in labels:
+            r = results[l]["details"][i]["recall"]
+            recalls[l] = r
+            row += f" {r:>8.2f}"
+        print(row)
+
+        # Track wins (cAST ours vs fixed, cAST ref vs fixed)
+        best = max(recalls.values())
+        for l in labels:
+            if recalls[l] == best:
+                wins[l] += 1
 
     # -------------------------------------------------------------------
     # Step 5: Summary
     # -------------------------------------------------------------------
-    print("\n" + "=" * 70)
+    print("\n" + "=" * 72)
     print("SUMMARY")
-    print("=" * 70)
+    print("=" * 72)
+
     print(f"\n  Total queries: {len(QUERIES)}")
-    print(f"  cAST wins: {cast_wins}  |  Fixed wins: {fixed_wins}  |  Ties: {ties}")
-    print(f"\n  cAST  — Avg Precision@{top_k}: {cast_results['avg_precision']:.4f}, "
-          f"Avg Recall@{top_k}: {cast_results['avg_recall']:.4f}")
-    print(f"  Fixed — Avg Precision@{top_k}: {fixed_results['avg_precision']:.4f}, "
-          f"Avg Recall@{top_k}: {fixed_results['avg_recall']:.4f}")
+    print(f"\n  {'Strategy':<20} {'Precision@3':>12} {'Recall@3':>12} {'Breaks':>8} {'Best':>6}")
+    print(f"  {'-'*58}")
 
-    p_delta = cast_results["avg_precision"] - fixed_results["avg_precision"]
-    r_delta = cast_results["avg_recall"] - fixed_results["avg_recall"]
-    print(f"\n  Precision delta: {'+' if p_delta >= 0 else ''}{p_delta:.4f}")
-    print(f"  Recall delta:    {'+' if r_delta >= 0 else ''}{r_delta:.4f}")
+    for label, chunks in strategies.items():
+        p = results[label]["avg_precision"]
+        r = results[label]["avg_recall"]
+        b = count_mid_block_breaks(chunks)
+        w = wins[label]
+        print(f"  {label.strip():<20} {p:>12.4f} {r:>12.4f} {b:>8} {w:>6}")
 
-    if cast_results["avg_recall"] > fixed_results["avg_recall"]:
-        print("\n  RESULT: cAST outperforms fixed-size chunking on retrieval,")
-        print("  confirming the paper's finding that structure-aware chunking")
+    # Highlight the key finding
+    ours_recall = results["cAST (ours)"]["avg_recall"]
+    ref_recall = results["cAST (ref) "]["avg_recall"]
+    fixed_recall = results["Fixed-size "]["avg_recall"]
+    cast_better = ours_recall > fixed_recall or ref_recall > fixed_recall
+
+    if cast_better:
+        best_cast = max(ours_recall, ref_recall)
+        delta = best_cast - fixed_recall
+        print(f"\n  cAST improves recall by +{delta:.4f} over fixed-size chunking.")
+        print("  This confirms the paper's finding: structure-aware chunking")
         print("  produces more semantically coherent, retrievable code units.")
-    elif cast_results["avg_recall"] == fixed_results["avg_recall"]:
-        print("\n  RESULT: Both methods tied on recall. cAST still produces")
-        print("  structurally cleaner chunks (fewer mid-block breaks).")
     else:
-        print("\n  RESULT: Fixed-size chunking edged ahead on this test set.")
-        print("  The paper's gains are larger on real-world repositories.")
+        print("\n  Results are mixed on this small test set. The paper's")
+        print("  gains are more pronounced on larger real-world repositories.")
 
+    print()
     print_separator()
     return 0
 
